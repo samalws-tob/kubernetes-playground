@@ -1,0 +1,244 @@
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+spec:
+  mtls:
+    mode: STRICT
+---
+######################################
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-a
+  labels:
+    app: a
+spec:
+  type: ClusterIP
+  selector:
+    app: a
+  ports:
+  - port: 80
+    targetPort: 80
+    name: http
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sa-a
+  labels:
+    app: a
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dep-a
+  labels:
+    app: a
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: a
+  template:
+    metadata:
+      labels:
+        app: a
+    spec:
+      serviceAccountName: sa-a
+      containers:
+      - name: curl
+        image: curlimages/curl
+        command: ["sleep"]
+        args: ["infinity"]
+        ports:
+        - containerPort: 80
+---
+######################################
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-b
+  labels:
+    app: b
+spec:
+  type: ClusterIP
+  selector:
+    app: b
+  ports:
+  - port: 80
+    targetPort: 80
+    name: http
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sa-b
+  labels:
+    app: b
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dep-b
+  labels:
+    app: b
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: b
+  template:
+    metadata:
+      labels:
+        app: b
+    spec:
+      serviceAccountName: sa-b
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        ports:
+        - containerPort: 80
+---
+######################################
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-c
+  labels:
+    app: c
+spec:
+  type: ClusterIP
+  selector:
+    app: c
+  ports:
+  - port: 80
+    targetPort: 80
+    name: http
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sa-c
+  labels:
+    app: c
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dep-c
+  labels:
+    app: c
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: c
+  template:
+    metadata:
+      labels:
+        app: c
+    spec:
+      serviceAccountName: sa-c
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        ports:
+        - containerPort: 80
+---
+################
+apiVersion: "security.istio.io/v1beta1"
+kind: "AuthorizationPolicy"
+metadata:
+  name: "b-allow-a"
+spec:
+  selector:
+    matchLabels:
+      app: b
+  rules:
+  - from:
+    - source:
+        principals:
+        - "cluster.local/ns/app/sa/sa-a"
+---
+apiVersion: "security.istio.io/v1beta1"
+kind: "AuthorizationPolicy"
+metadata:
+  name: "c-only-ingress"
+spec:
+  selector:
+    matchLabels:
+      app: c
+  rules:
+  - from:
+    - source:
+        principals:
+        - "cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: gw-c
+  labels:
+    app: c
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: cred-c
+    hosts:
+    - c.abc.com
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: vs-c
+  labels:
+    app: c
+spec:
+  hosts:
+  - c.abc.com
+  gateways:
+  - gw-c
+  http:
+  - route:
+    - destination:
+        host: svc-c
+        port:
+          number: 80
+---
+######################################
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: auth-kv-c
+spec:
+  method: kubernetes
+  mount: kubernetes-proj
+  namespace: admin
+  kubernetes:
+    role: sa-c-role
+    serviceAccount: sa-c
+    audiences:
+    - vault
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: static-sec-kv-c
+spec:
+  type: kv-v2
+  namespace: admin
+  mount: proj-kv
+  path: abc 
+  destination:
+    name: sec-kv-c
+    create: true
+  refreshAfter: 30s 
+  vaultAuthRef: auth-kv-c
